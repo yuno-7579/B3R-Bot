@@ -1,0 +1,12 @@
+{
+  "name": "b3r-rp-bot",
+  "version": "1.0.0",
+  "description": "البوت الموحد لسيرفر B3R RP (تذاكر + مقابلة Whitelist + قبول/رفض)",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js"
+  },
+  "dependencies": {
+    "discord.js": "^14.14.1"
+  }
+}
