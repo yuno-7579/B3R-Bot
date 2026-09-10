@@ -1,7 +1,7 @@
 {
-  "name": "b3r-rp-bot",
+  "name": "b3r-logs-tickets-bot",
   "version": "1.0.0",
-  "description": "البوت الموحد لسيرفر B3R RP (تذاكر + مقابلة Whitelist + قبول/رفض)",
+  "description": "بوت لوجز شامل + نظام تذاكر عربي كامل لسيرفر B3R RP",
   "main": "index.js",
   "scripts": {
     "start": "node index.js"
