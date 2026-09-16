@@ -467,7 +467,18 @@ client.on('interactionCreate', async (interaction) => {
             .setRequired(true)
             .setMaxLength(500);
 
-        modal.addComponents(new ActionRowBuilder().addComponents(reasonInput));
+        const evidenceInput = new TextInputBuilder()
+            .setCustomId('evidence')
+            .setLabel('الدليل على سبب الاستدعاء')
+            .setPlaceholder('رابط سكرين شوت أو فيديو أو وصف الدليل')
+            .setStyle(TextInputStyle.Paragraph)
+            .setRequired(true)
+            .setMaxLength(500);
+
+        modal.addComponents(
+            new ActionRowBuilder().addComponents(reasonInput),
+            new ActionRowBuilder().addComponents(evidenceInput)
+        );
         await interaction.showModal(modal);
         return;
     }
