@@ -6,7 +6,8 @@
 const {
     Client, GatewayIntentBits, Partials, EmbedBuilder, SlashCommandBuilder,
     REST, Routes, ActionRowBuilder, ButtonBuilder, ButtonStyle,
-    StringSelectMenuBuilder, PermissionFlagsBits, ChannelType, AuditLogEvent
+    StringSelectMenuBuilder, UserSelectMenuBuilder, ModalBuilder, TextInputBuilder, TextInputStyle,
+    PermissionFlagsBits, ChannelType, AuditLogEvent
 } = require('discord.js');
 const fs = require('fs');
 
@@ -47,6 +48,14 @@ const TICKETS_CATEGORY_ID = process.env.TICKETS_CATEGORY_ID;
 const SUPPORT_ROLE_ID = process.env.SUPPORT_ROLE_ID;
 const TICKETS_PANEL_CHANNEL_ID = process.env.TICKETS_PANEL_CHANNEL_ID; // اختياري، للأمر /tickets-setup مش لازم
 
+// --- نظام الاستدعاء الرقابي ---
+const INVESTIGATION_ROLE_ID = process.env.INVESTIGATION_ROLE_ID; // فريق الرقابة — مين يقدر يطلب
+const MANAGER_ROLE_ID = process.env.MANAGER_ROLE_ID;             // مين يقدر يقبل/يرفض
+const REVIEW_CHANNEL_ID = process.env.REVIEW_CHANNEL_ID;         // روم مراجعة طلبات الاستدعاء
+const SUMMON_ROLE_ID = process.env.SUMMON_ROLE_ID;               // رول "استدعاء رقابي" اللي بيتحط
+const WHITELIST_ROLE_ID = process.env.WHITELIST_ROLE_ID;         // رول الوايت ليست اللي بيتشال
+const pendingSummonRequests = new Map(); // requesterId -> targetUserId
+
 const TICKETS_DB_PATH = './tickets.json';
 function loadDB() {
     if (!fs.existsSync(TICKETS_DB_PATH)) fs.writeFileSync(TICKETS_DB_PATH, '{}');
@@ -84,6 +93,10 @@ const commands = [
     new SlashCommandBuilder()
         .setName('tickets-setup')
         .setDescription('إنشاء رسالة نظام التذاكر (للأدمن فقط)')
+        .setDefaultMemberPermissions(PermissionFlagsBits.Administrator),
+    new SlashCommandBuilder()
+        .setName('summon-setup')
+        .setDescription('إنشاء رسالة طلب الاستدعاء الرقابي (للأدمن فقط)')
         .setDefaultMemberPermissions(PermissionFlagsBits.Administrator)
 ];
 
@@ -399,6 +412,138 @@ client.on('interactionCreate', async (interaction) => {
         setTimeout(async () => {
             try { await interaction.channel.delete(); } catch (e) { }
         }, 5000);
+        return;
+    }
+
+    // ============================================================
+    // ✅ نظام الاستدعاء الرقابي
+    // ============================================================
+
+    // ─── SLASH: /summon-setup ──────────
+    if (interaction.isChatInputCommand() && interaction.commandName === 'summon-setup') {
+        const embed = new EmbedBuilder()
+            .setColor('#CC0000')
+            .setTitle('📢 طلب استدعاء رقابي')
+            .setDescription('فريق الرقابة بس يقدر يستخدم الزرار ده. اضغط لبدء طلب استدعاء عضو.')
+            .setFooter({ text: 'B3R RP' });
+
+        const row = new ActionRowBuilder().addComponents(
+            new ButtonBuilder().setCustomId('start_summon').setLabel('طلب استدعاء رقابي').setEmoji('📢').setStyle(ButtonStyle.Danger)
+        );
+
+        await interaction.channel.send({ embeds: [embed], components: [row] });
+        await interaction.reply({ content: '✅ تم إنشاء الرسالة.', ephemeral: true });
+        return;
+    }
+
+    // ─── BUTTON: بدء طلب الاستدعاء (فريق الرقابة بس) ──────────
+    if (interaction.isButton() && interaction.customId === 'start_summon') {
+        const isInvestigation = interaction.member.roles.cache.has(INVESTIGATION_ROLE_ID) || interaction.member.permissions.has(PermissionFlagsBits.Administrator);
+        if (!isInvestigation) {
+            return interaction.reply({ content: '❌ الزرار ده لفريق الرقابة بس.', ephemeral: true });
+        }
+
+        const row = new ActionRowBuilder().addComponents(
+            new UserSelectMenuBuilder().setCustomId('summon_target').setPlaceholder('اختر العضو المطلوب استدعائه')
+        );
+
+        await interaction.reply({ content: 'اختر العضو اللي عايز تطلب استدعاءه:', components: [row], ephemeral: true });
+        return;
+    }
+
+    // ─── USER SELECT: اختيار العضو ──────────
+    if (interaction.isUserSelectMenu() && interaction.customId === 'summon_target') {
+        const targetUser = interaction.values[0];
+        pendingSummonRequests.set(interaction.user.id, targetUser);
+
+        const modal = new ModalBuilder()
+            .setCustomId('summon_reason_modal')
+            .setTitle('سبب الاستدعاء');
+
+        const reasonInput = new TextInputBuilder()
+            .setCustomId('reason')
+            .setLabel('سبب الاستدعاء')
+            .setStyle(TextInputStyle.Paragraph)
+            .setRequired(true)
+            .setMaxLength(500);
+
+        modal.addComponents(new ActionRowBuilder().addComponents(reasonInput));
+        await interaction.showModal(modal);
+        return;
+    }
+
+    // ─── MODAL SUBMIT: إرسال طلب الاستدعاء للمراجعة ──────────
+    if (interaction.isModalSubmit() && interaction.customId === 'summon_reason_modal') {
+        const targetUserId = pendingSummonRequests.get(interaction.user.id);
+        pendingSummonRequests.delete(interaction.user.id);
+
+        if (!targetUserId) {
+            return interaction.reply({ content: '❌ حصل خطأ، جرب تاني من الأول.', ephemeral: true });
+        }
+
+        const reason = interaction.fields.getTextInputValue('reason');
+
+        const embed = new EmbedBuilder()
+            .setColor('#f1c40f')
+            .setTitle('📢 طلب استدعاء رقابي جديد')
+            .addFields(
+                { name: 'اسم العضو المطلوب استدعائه', value: `<@${targetUserId}>` },
+                { name: 'سبب الاستدعاء', value: reason },
+                { name: 'التاريخ', value: `<t:${Math.floor(Date.now() / 1000)}:F>` },
+                { name: 'تم الطلب بواسطة', value: `${interaction.user}` }
+            )
+            .setFooter({ text: 'B3R RP | نظام الاستدعاء الرقابي' })
+            .setTimestamp();
+
+        const row = new ActionRowBuilder().addComponents(
+            new ButtonBuilder().setCustomId(`summon_accept_${targetUserId}`).setLabel('قبول').setEmoji('✅').setStyle(ButtonStyle.Success),
+            new ButtonBuilder().setCustomId(`summon_reject_${targetUserId}`).setLabel('رفض').setEmoji('❌').setStyle(ButtonStyle.Danger)
+        );
+
+        try {
+            const reviewChannel = await client.channels.fetch(REVIEW_CHANNEL_ID);
+            await reviewChannel.send({ embeds: [embed], components: [row] });
+            await interaction.reply({ content: '✅ تم إرسال طلبك للمراجعة.', ephemeral: true });
+        } catch (err) {
+            console.error('❌ خطأ في إرسال الطلب:', err);
+            await interaction.reply({ content: '❌ حصل خطأ في إرسال الطلب.', ephemeral: true });
+        }
+        return;
+    }
+
+    // ─── BUTTON: قبول / رفض طلب الاستدعاء (المسؤول بس) ──────────
+    if (interaction.isButton() && (interaction.customId.startsWith('summon_accept_') || interaction.customId.startsWith('summon_reject_'))) {
+        const isManager = interaction.member.roles.cache.has(MANAGER_ROLE_ID) || interaction.member.permissions.has(PermissionFlagsBits.Administrator);
+        if (!isManager) {
+            return interaction.reply({ content: '❌ الأمر ده للمسؤولين بس.', ephemeral: true });
+        }
+
+        const accepted = interaction.customId.startsWith('summon_accept_');
+        const targetUserId = interaction.customId.split('_')[2];
+
+        if (accepted) {
+            try {
+                const member = await interaction.guild.members.fetch(targetUserId);
+                if (SUMMON_ROLE_ID) await member.roles.add(SUMMON_ROLE_ID);
+                if (WHITELIST_ROLE_ID) await member.roles.remove(WHITELIST_ROLE_ID);
+            } catch (err) {
+                console.error('❌ خطأ في تعديل الرولات:', err);
+                return interaction.reply({ content: '❌ حصل خطأ في تعديل رولات العضو، تأكد إن رتبة البوت فوق الرولات دي.', ephemeral: true });
+            }
+        }
+
+        const disabledRow = new ActionRowBuilder().addComponents(
+            new ButtonBuilder().setCustomId('summon_done_accept').setLabel('قبول').setEmoji('✅').setStyle(ButtonStyle.Success).setDisabled(true),
+            new ButtonBuilder().setCustomId('summon_done_reject').setLabel('رفض').setEmoji('❌').setStyle(ButtonStyle.Danger).setDisabled(true)
+        );
+
+        await interaction.update({ components: [disabledRow] });
+        await interaction.followUp({
+            content: `${accepted ? '✅ تم قبول الطلب' : '❌ تم رفض الطلب'} بواسطة ${interaction.user}${accepted ? ` — <@${targetUserId}> اتحط له رول الاستدعاء الرقابي وشيل منه الوايت ليست` : ''}`
+        });
+
+        await sendLog('security', baseEmbed(accepted ? '#2ecc71' : '#e74c3c', accepted ? '✅ قبول استدعاء رقابي' : '❌ رفض استدعاء رقابي')
+            .setDescription(`**بواسطة:** ${interaction.user}\n**العضو:** <@${targetUserId}>`));
         return;
     }
 });
